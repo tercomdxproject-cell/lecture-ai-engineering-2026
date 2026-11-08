@@ -9,9 +9,10 @@ from pydantic_ai import DeferredToolRequests
 from pydantic_ai.messages import ToolCallPart, ToolReturnPart
 from pydantic_ai.models.test import TestModel
 
-from app.agent import agent
+from app.agent import agent, run_with_approval
+from app import tools
 
-BASE_TOOLS = {"search_glossary", "get_lecture_summary"}
+BASE_TOOLS = {"search_glossary", "get_lecture_summary", "make_quiz", "save_learning_log"}
 
 
 def _parts(result, kind):
@@ -40,3 +41,26 @@ def test_glossary_result_reaches_the_model():
         result = agent.run_sync("RAGとは？")
     returns = _parts(result, ToolReturnPart)
     assert returns and returns[0].tool_name == "search_glossary"
+
+
+def test_save_learning_log_runs_only_after_cli_approval(tmp_path, monkeypatch):
+    monkeypatch.setattr(tools, "LEARNING_LOG_DIR", tmp_path)
+    monkeypatch.setattr("builtins.input", lambda _: "y")
+    model = TestModel(call_tools=["save_learning_log"])
+
+    result = run_with_approval(agent, "今日の学習を記録して", model)
+
+    assert isinstance(result.output, str)
+    saved_files = list(tmp_path.glob("*.md"))
+    assert len(saved_files) == 1
+    assert saved_files[0].read_text(encoding="utf-8").strip()
+
+
+def test_save_learning_log_is_not_run_after_cli_rejection(tmp_path, monkeypatch):
+    monkeypatch.setattr(tools, "LEARNING_LOG_DIR", tmp_path)
+    monkeypatch.setattr("builtins.input", lambda _: "n")
+    model = TestModel(call_tools=["save_learning_log"])
+
+    run_with_approval(agent, "今日の学習を記録して", model)
+
+    assert not list(tmp_path.glob("*.md"))
